@@ -1,0 +1,73 @@
+---
+- name: Deploy Docker Compose Project to AWS EC2
+  hosts: new_servers
+  become: yes
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        force_apt_get: yes
+
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+
+    - name: Install Docker Compose
+      apt:
+        name: docker-compose-v2
+        state: present
+
+    - name: Ensure Docker is running
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Copy project files to remote server
+      copy:
+        src: ../
+        dest: /home/ubuntu/app/
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: Run Docker Compose project
+      shell: "docker compose up --build -d"
+      args:
+        chdir: /home/ubuntu/app/
+
+
+
+    - name: Install Node Exporter for metrics
+      apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: yes
+
+    - name: Ensure Node Exporter is running
+      systemd:
+        name: prometheus-node-exporter
+        state: started
+        enabled: yes
+
+
+    - name: Dynamically update Prometheus configuration on Master Node
+      delegate_to: localhost
+      become: yes
+      blockinfile:
+        path: /etc/prometheus/prometheus.yml
+        marker: "# {mark} ANSIBLE MANAGED TARGETS"
+        block: |
+          - job_name: 'aws_node_servers'
+            static_configs:
+              - targets: [ {% for host in groups['new_servers'] %}'{{ hostvars[host]['ansible_host'] | default(host) }}:9100'{% if not loop.last %}, {% endif %}{% endfor %} ]
+      notify: Restart Local Prometheus
+
+  handlers:
+    - name: Restart Local Prometheus
+      delegate_to: localhost
+      systemd:
+        name: prometheus
+        state: restarted
